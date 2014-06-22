@@ -26,6 +26,9 @@ enum { T_FUN = 0, T_LAMBDA, T_CONS, T_MPZ, T_SYM, T_ERR, };
 struct lambda_s;
 typedef struct lambda_s *lambda_t;
 
+struct sym_list_s;
+typedef struct sym_list_s *sym_list_ptr;
+
 struct node_s;
 typedef struct node_s *node_t;
 struct node_s {
@@ -33,7 +36,7 @@ struct node_s {
   node_t car, cdr;
   mpz_t z;
   char *s;
-  node_t (*fun)(node_t);
+  node_t (*fun)(node_t, sym_list_ptr);
   lambda_t lambda;
 };
 
@@ -78,6 +81,9 @@ void show(node_t node) {
   case T_FUN:
     fputs("[function]", stdout);
     break;
+  case T_LAMBDA:
+    fputs("[lambda]", stdout);
+    break;
   case T_ERR:
     printf("ERROR: %s\n", node->s);
     break;
@@ -116,13 +122,12 @@ node_t node_err(char *s) {
   return r;
 }
 
-node_t sym_quote, sym_if, sym_t, sym_nil, sym_lambda;
+node_t sym_quote, sym_if, sym_t, sym_nil, sym_lambda, sym_let;
 
 struct sym_list_s {
-  struct sym_list_s *next;
+  sym_list_ptr next;
   BLT *sym;
 };
-typedef struct sym_list_s *sym_list_ptr;
 typedef struct sym_list_s sym_list_t[1];
 
 node_t eval(node_t node, sym_list_t syms) {
@@ -170,6 +175,26 @@ node_t eval(node_t node, sym_list_t syms) {
       r->lambda = lambda;
       return r;
     }
+    if (node->car == sym_let) {
+      sym_list_ptr lsym = malloc(sizeof(*lsym));
+      lsym->next = syms;
+      lsym->sym = blt_new();
+      node = CDR(node);
+      node_t vars = CAR(node);
+      while (vars) {
+        node_t varinit = CAR(vars);
+        node_t var = CAR(varinit);
+        if (var->type != T_SYM) return node_err("expected symbol");
+        if (CDR(CDR(varinit))) return node_err("malformed let binding");
+        blt_put(lsym->sym, var->s, EVAL_CHECK(CAR(CDR(varinit))));
+        vars = CDR(vars);
+      }
+      syms = lsym;
+      node_t r = 0;
+      while ((node = CDR(node))) r = EVAL_CHECK(CAR(node));
+      syms = syms->next;
+      return r;
+    }
 
     node_t fun = EVAL_CHECK(node->car);
     if (fun->type != T_FUN && fun->type != T_LAMBDA) {
@@ -189,7 +214,7 @@ node_t eval(node_t node, sym_list_t syms) {
     }
     node_t r = 0;
     if (fun->type == T_FUN) {
-      r = fun->fun(arg);
+      r = fun->fun(arg, syms);
     } else {
       sym_list_t lsym;
       lsym->sym = blt_new();
@@ -207,7 +232,6 @@ node_t eval(node_t node, sym_list_t syms) {
       r = EVAL_CHECK(fun->lambda->body);
       syms = lsym->next;
     }
-    // TODO: Free arg.
     return r;
   } break;
   case T_MPZ: {
@@ -224,11 +248,14 @@ node_t eval(node_t node, sym_list_t syms) {
     }
     return node_err("undefined symbol");
   }
+  case T_LAMBDA:
+  case T_FUN:
+    return node;
   }
   die("TODO");
 }
 
-node_t node_new_fun(node_t (*fun)(node_t)) {
+node_t node_new_fun(node_t (*fun)(node_t, sym_list_t)) {
   node_t r = malloc(sizeof(*r));
   r->type = T_FUN;
   r->fun = fun;
@@ -237,7 +264,7 @@ node_t node_new_fun(node_t (*fun)(node_t)) {
 
 int main() {
   built_in = blt_new();
-  blt_put(built_in, "+", node_new_fun(({node_t _(node_t arg) {
+  blt_put(built_in, "+", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     node_t r = node_new_mpz();
     while (arg) {
       if (arg->car->type != T_MPZ) return node_err("expected int");
@@ -246,7 +273,7 @@ int main() {
     }
     return r;
   }_;})));
-  blt_put(built_in, "car", node_new_fun(({node_t _(node_t arg) {
+  blt_put(built_in, "car", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     if (!arg) return node_err("expected one argument");
     CHECK(arg->type == T_CONS);
     if (arg->cdr != 0) return node_err("expected only one argument");
@@ -254,13 +281,30 @@ int main() {
 
     return arg->car->car;
   }_;})));
-  blt_put(built_in, "cdr", node_new_fun(({node_t _(node_t arg) {
+  blt_put(built_in, "cdr", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     if (!arg) return node_err("expected one argument");
     CHECK(arg->type == T_CONS);
     if (arg->cdr != 0) return node_err("expected only one argument");
     if (arg->car->type != T_CONS) return node_err("expected cons");
 
     return arg->car->cdr;
+  }_;})));
+  blt_put(built_in, "set", node_new_fun(({node_t _(node_t arg, sym_list_ptr syms) {
+    if (!arg) return node_err("expected two arguments (got 0)");
+    CHECK(arg->type == T_CONS);
+    if (arg->cdr == 0) return node_err("expected two arguments (got 1)");
+    if (arg->cdr->cdr != 0) return node_err("expected only two arguments");
+    if (arg->car->type != T_SYM) return node_err("expected symbol");
+    for (sym_list_ptr p = syms; p; p = p->next) {
+      BLT_IT *it = blt_get(p->sym, arg->car->s);
+      if (it) {
+        it->data = arg->cdr->car;
+        return it->data;
+      }
+    }
+    fprintf(stderr, "[warning: undefined var]\n");
+    blt_put(syms->sym, arg->car->s, arg->cdr->car);
+    return arg->cdr->car;
   }_;})));
 
   mpz_t ztmp;
@@ -278,6 +322,7 @@ int main() {
   sym_nil    = node_new_sym("nil");
   sym_t      = node_new_sym("t");
   sym_lambda = node_new_sym("lambda");
+  sym_let    = node_new_sym("let");
   node_t parse() {
     for (;;) {
       for(;;) {
@@ -287,7 +332,7 @@ int main() {
         line = readline(prompt);
         prompt = "";
         if (line && *line) add_history(line);
-        if (!line) exit(0);  // TODO: Exit more gracefully.
+        if (!line) exit(0);
         cursor = line;
       }
       char *start = cursor;
