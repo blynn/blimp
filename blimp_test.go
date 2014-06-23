@@ -27,4 +27,5 @@ func TestBasic(t *testing.T) {
   oneliner(t, "(cdr '(1 2 3))", "(2 . (3 . NIL))")
   oneliner(t, "(set 'third (lambda (x) (car (cdr (cdr x))))) (third '(1 2 3 4))", "[lambda]\n3")
   oneliner(t, "(let ((x 5)) (set 'add5 (lambda (y) (+ x y)))) (add5 123)", "[lambda]\n128")
+  oneliner(t, "(defun f (x) (if (< x 1) 0 (+ x (f (+ x -1))))) (f 100)", "[lambda]\n5050")
 }

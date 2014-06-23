@@ -124,7 +124,7 @@ node_t node_err(char *s) {
   return r;
 }
 
-node_t sym_quote, sym_if, sym_t, sym_nil, sym_lambda, sym_let;
+node_t sym_quote, sym_if, sym_t, sym_nil, sym_lambda, sym_let, sym_defun;
 
 struct sym_list_s {
   sym_list_ptr next;
@@ -176,6 +176,29 @@ node_t eval(node_t node, sym_list_t syms) {
       node_t r = malloc(sizeof(*r));
       r->type = T_LAMBDA;
       r->lambda = lambda;
+      return r;
+    }
+    if (node->car == sym_defun) {
+      lambda_t lambda = lambda_new();
+      node = CDR(node);
+      node_t name = CAR(node);
+      if (name->type != T_SYM) return node_err("expected symbol");
+      node = CDR(node);
+      node_t vars = CAR(node);
+      while (vars) {
+        node_t var = CAR(vars);
+        if (var->type != T_SYM) return node_err("expected symbol");
+        lambda_add_arg(lambda, var->s);
+        vars = CDR(vars);
+      }
+      node = CDR(node);
+      lambda->syms = syms;
+      lambda->body = node->car;
+      if (node->cdr) return node_err("too many args");
+      node_t r = malloc(sizeof(*r));
+      r->type = T_LAMBDA;
+      r->lambda = lambda;
+      blt_put(special, name->s, r);
       return r;
     }
     if (node->car == sym_let) {
@@ -268,6 +291,18 @@ node_t node_new_fun(node_t (*fun)(node_t, sym_list_t)) {
 
 int main() {
   special = blt_new();
+  blt_put(special, "<", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
+    if (!arg) return node_err("expected one argument");
+    if (arg->car->type != T_MPZ) return node_err("expected int");
+    mpz_ptr z = arg->car->z;
+    for (;;) {
+      arg = arg->cdr;
+      if (!arg) return sym_t;
+      if (arg->car->type != T_MPZ) return node_err("expected int");
+      if (mpz_cmp(z, arg->car->z) >= 0) return 0;
+      z = arg->car->z;
+    }
+  }_;})));
   blt_put(special, "+", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     node_t r = node_new_mpz();
     while (arg) {
@@ -346,6 +381,7 @@ int main() {
   sym_t      = node_new_sym("t");
   sym_lambda = node_new_sym("lambda");
   sym_let    = node_new_sym("let");
+  sym_defun  = node_new_sym("defun");
   node_t parse() {
     for (;;) {
       for(;;) {
