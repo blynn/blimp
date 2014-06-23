@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <unistd.h>
 #include <gmp.h>
 #include "blt.h"
 
@@ -44,6 +45,7 @@ struct lambda_s {
   char **arg;
   int argn;
   node_t body;
+  sym_list_ptr syms;
 };
 
 lambda_t lambda_new() {
@@ -93,7 +95,7 @@ void show(node_t node) {
   }
 }
 
-BLT *built_in;
+BLT *special;
 
 node_t node_new_mpz() {
   node_t r = malloc(sizeof(*r));
@@ -168,6 +170,7 @@ node_t eval(node_t node, sym_list_t syms) {
         vars = CDR(vars);
       }
       node = CDR(node);
+      lambda->syms = syms;
       lambda->body = node->car;
       if (node->cdr) return node_err("too many args");
       node_t r = malloc(sizeof(*r));
@@ -218,7 +221,8 @@ node_t eval(node_t node, sym_list_t syms) {
     } else {
       sym_list_t lsym;
       lsym->sym = blt_new();
-      lsym->next = syms;
+      lsym->next = fun->lambda->syms;
+      sym_list_ptr orig = syms;
       int n = 0;
       while (arg) {
         if (n >= fun->lambda->argn) return node_err("too many lambda args");
@@ -230,7 +234,7 @@ node_t eval(node_t node, sym_list_t syms) {
       if (n < fun->lambda->argn) return node_err("too few lambda args");
       syms = lsym;
       r = EVAL_CHECK(fun->lambda->body);
-      syms = lsym->next;
+      syms = orig;
     }
     return r;
   } break;
@@ -263,8 +267,8 @@ node_t node_new_fun(node_t (*fun)(node_t, sym_list_t)) {
 }
 
 int main() {
-  built_in = blt_new();
-  blt_put(built_in, "+", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
+  special = blt_new();
+  blt_put(special, "+", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     node_t r = node_new_mpz();
     while (arg) {
       if (arg->car->type != T_MPZ) return node_err("expected int");
@@ -273,7 +277,7 @@ int main() {
     }
     return r;
   }_;})));
-  blt_put(built_in, "car", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
+  blt_put(special, "car", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     if (!arg) return node_err("expected one argument");
     CHECK(arg->type == T_CONS);
     if (arg->cdr != 0) return node_err("expected only one argument");
@@ -281,7 +285,7 @@ int main() {
 
     return arg->car->car;
   }_;})));
-  blt_put(built_in, "cdr", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
+  blt_put(special, "cdr", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     if (!arg) return node_err("expected one argument");
     CHECK(arg->type == T_CONS);
     if (arg->cdr != 0) return node_err("expected only one argument");
@@ -289,7 +293,7 @@ int main() {
 
     return arg->car->cdr;
   }_;})));
-  blt_put(built_in, "set", node_new_fun(({node_t _(node_t arg, sym_list_ptr syms) {
+  blt_put(special, "set", node_new_fun(({node_t _(node_t arg, sym_list_ptr syms) {
     if (!arg) return node_err("expected two arguments (got 0)");
     CHECK(arg->type == T_CONS);
     if (arg->cdr == 0) return node_err("expected two arguments (got 1)");
@@ -302,8 +306,8 @@ int main() {
         return it->data;
       }
     }
-    fprintf(stderr, "[warning: undefined var]\n");
-    blt_put(syms->sym, arg->car->s, arg->cdr->car);
+    //fprintf(stderr, "[warning: undefined var]\n");
+    blt_put(special, arg->car->s, arg->cdr->car);
     return arg->cdr->car;
   }_;})));
 
@@ -316,6 +320,25 @@ int main() {
   node_t rparen = malloc(sizeof(*rparen));
 
   void *prompt = "";
+
+  char *(*liner)() = ({char*_() {
+    char *r = readline(prompt);
+    if (r && *r) add_history(r);
+    return r;
+  }_;});
+  if (!isatty(STDIN_FILENO)) liner = ({char*_(){
+    char *r = 0;
+    size_t n;
+    if (-1 == getline(&r, &n, stdin)) {
+      free(r);
+      r = 0;
+    } else {
+      char *c = r + strlen(r) - 1;
+      if (*c == '\n') *c = 0;
+    }
+    return r;
+  }_;});
+
   allsyms = blt_new();
   sym_quote  = node_new_sym("quote");
   sym_if     = node_new_sym("if");
@@ -329,9 +352,8 @@ int main() {
         while (*cursor == ' ') cursor++;
         if (*cursor) break;
         free(line);
-        line = readline(prompt);
+        line = liner();
         prompt = "";
-        if (line && *line) add_history(line);
         if (!line) exit(0);
         cursor = line;
       }
@@ -372,7 +394,6 @@ int main() {
           return node_new_sym(word);
         }
       }
-      //printf("'%s'\n", word);
       free(word);
     }
   }
@@ -382,7 +403,7 @@ int main() {
     node_t node = parse();
     sym_list_t syms;
     syms->next = 0;
-    syms->sym = built_in;
+    syms->sym = special;
     show(eval(node, syms));
     putchar('\n');
   }
