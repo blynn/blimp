@@ -1,0 +1,7 @@
+= Blimp =
+Ben Lynn
+
+Blimp stands for Ben's Lisp Implementation, and also describes the memory
+use of the interpreter: there is no garbage collection.
+
+I wrote it to help me (re)learn Lisp.
