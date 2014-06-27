@@ -121,8 +121,8 @@ node_t node_err(char *s) {
   return r;
 }
 
-node_t sym_quote, sym_if, sym_t, sym_nil, sym_lambda, sym_let, sym_defun,
-   sym_progn;
+node_t sym_quote, sym_if, sym_cond, sym_t, sym_nil, sym_lambda, sym_let,
+    sym_defun, sym_progn;
 
 struct sym_list_s {
   sym_list_ptr next;
@@ -172,7 +172,7 @@ node_t eval(node_t node, sym_list_t syms) {
   if (!node) return 0;
   switch (node->type) {
   case T_CONS:
-    if (node->car == sym_quote) return node->cdr;
+    if (node->car == sym_quote) return CAR(CDR(node));
     if (node->car == sym_if) {
       node = CDR(node);
       node_t cond = CAR(node);
@@ -181,6 +181,17 @@ node_t eval(node_t node, sym_list_t syms) {
       node = CDR(node);
       node_t onfalse = CAR(node);
       return EVAL_CHECK(cond) ? EVAL_CHECK(ontrue) : EVAL_CHECK(onfalse);
+    }
+    if (node->car == sym_cond) {
+      while ((node = node->cdr)) {
+        node_t x = CAR(node);
+        node_t r = EVAL_CHECK(CAR(x));
+        if (r) {
+          while ((x = CDR(x))) r = EVAL_CHECK(x->car);
+          return r;
+        }
+      }
+      return 0;
     }
     if (node->car == sym_lambda) {
       lambda_t lambda = lambda_new();
@@ -329,6 +340,28 @@ int main() {
     if (arg->car) return 0;
     return sym_t;
   }_;})));
+  blt_put(special, "atom", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
+    if (!arg) return node_err("expected one argument");
+    if (arg->cdr != 0) return node_err("expected only one argument");
+    if (arg->car->type == T_CONS) return 0;
+    return sym_t;
+  }_;})));
+  blt_put(special, "eq", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
+    if (!arg || !arg->cdr || arg->cdr->cdr) return node_err("expected two arguments");
+    node_t x = arg->car, y = arg->cdr->car;
+    if (!x || !y) return x == y ? sym_t : 0;
+    if (x->type == T_CONS || x->type != y->type) return 0;
+    switch (x->type) {
+      case T_FUN:
+        if (x->fun) return x->fun == y->fun ? sym_t : 0;
+        return x->lambda == y->lambda ? sym_t : 0;
+      case T_MPZ:
+        return !mpz_cmp(x->z, y->z) ? sym_t : 0;
+      case T_SYM:
+        return !strcmp(x->s, y->s) ?sym_t : 0;
+    }
+    return node_err("unhandled case");
+  }_;})));
   blt_put(special, "car", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
     if (!arg || arg->type != T_CONS) return node_err("expected cons");
     if (arg->cdr != 0) return node_err("expected only one argument");
@@ -399,6 +432,7 @@ int main() {
   allsyms = blt_new();
   sym_quote  = node_new_sym("quote");
   sym_if     = node_new_sym("if");
+  sym_cond   = node_new_sym("cond");
   sym_nil    = node_new_sym("nil");
   sym_t      = node_new_sym("t");
   sym_lambda = node_new_sym("lambda");
@@ -442,7 +476,10 @@ int main() {
           node_t r = malloc(sizeof(*r));
           r->type = T_CONS;
           r->car = sym_quote;
-          r->cdr = parse();
+          r->cdr = malloc(sizeof(*r));
+          r->cdr->type = T_CONS;
+          r->cdr->car = parse();
+          r->cdr->cdr = 0;
           return r;
         } else if (!mpz_set_str(ztmp, word, 0)) {
           node_t r = malloc(sizeof(*r));
