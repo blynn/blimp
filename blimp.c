@@ -1,4 +1,3 @@
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <readline/readline.h>
@@ -6,21 +5,6 @@
 #include <unistd.h>
 #include <gmp.h>
 #include "blt.h"
-
-#define CHECK(_x_) if (_x_); else die("FAIL %s:%d", __FILE__, __LINE__)
-
-#define NORETURN __attribute__((__noreturn__))
-
-void die(const char *err, ...) NORETURN __attribute__((format (printf, 1, 2)));
-void die(const char *err, ...) {
-  va_list params;
-
-  va_start(params, err);
-  vfprintf(stderr, err, params);
-  fputc('\n', stderr);
-  va_end(params);
-  exit(1);
-}
 
 enum { T_FUN = 0, T_CONS, T_MPZ, T_SYM, T_ERR, };
 
@@ -73,37 +57,49 @@ void show(node_t node) {
     printf(" . ");
     show(node->cdr);
     putchar(')');
-    break;
+    return;
   case T_MPZ:
     mpz_out_str(stdout, 0, node->z);
-    break;
+    return;
   case T_SYM:
     fputs(node->s, stdout);
-    break;
+    return;
   case T_FUN:
     fputs("[function]", stdout);
-    break;
+    return;
   case T_ERR:
     printf("ERROR: %s\n", node->s);
-    break;
-  default:
-    die("unhandled node type");
-    break;
+    return;
   }
+  printf("[bug! unhandled node type]");
 }
 
-BLT *special;
-
-node_t node_new_mpz() {
+node_t node_new_mpz(mpz_ptr z) {
   node_t r = malloc(sizeof(*r));
   r->type = T_MPZ;
   mpz_init(r->z);
+  if (z) mpz_set(r->z, z);
   return r;
 }
 
-BLT *allsyms;
+node_t node_new_cons(node_t car, node_t cdr) {
+  node_t r = malloc(sizeof(*r));
+  r->type = T_CONS;
+  r->car = car;
+  r->cdr = cdr;
+  return r;
+}
 
-node_t node_new_sym(char *s) {
+node_t node_new_fun(node_t (*fun)(node_t, sym_list_ptr)) {
+  node_t r = malloc(sizeof(*r));
+  r->type = T_FUN;
+  r->fun = fun;
+  return r;
+}
+
+BLT *allsyms, *special;
+
+node_t node_sym(char *s) {
   BLT_IT *it = blt_set(allsyms, s);
   if (!it->data) {
     node_t r = malloc(sizeof(*r));
@@ -121,8 +117,7 @@ node_t node_err(char *s) {
   return r;
 }
 
-node_t sym_quote, sym_if, sym_cond, sym_t, sym_nil, sym_lambda, sym_let,
-    sym_defun, sym_progn;
+node_t sym_t;
 
 struct sym_list_s {
   sym_list_ptr next;
@@ -130,10 +125,8 @@ struct sym_list_s {
 };
 typedef struct sym_list_s sym_list_t[1];
 
-#define EVAL_CHECK(_x_) ({  \
-  node_t r = eval(_x_, syms); \
-  if (r && r->type == T_ERR) return r; \
-  r; \
+#define EVAL(_x_) ({  \
+  node_t r = eval(_x_, syms); if (r && r->type == T_ERR) return r; r; \
 })
 #define CAR(_x_) ({ \
   if (!_x_ || _x_->type != T_CONS) return node_err("CAR: expected cons"); \
@@ -146,9 +139,7 @@ typedef struct sym_list_s sym_list_t[1];
 node_t eval(node_t node, sym_list_t syms);
 
 node_t run(node_t fun, node_t arg, sym_list_ptr syms) {
-  if (fun->fun) {
-    return fun->fun(arg, syms);
-  }
+  if (fun->fun) return fun->fun(arg, syms);
   sym_list_t lsym;
   lsym->sym = blt_new();
   lsym->next = fun->lambda->syms;
@@ -156,14 +147,14 @@ node_t run(node_t fun, node_t arg, sym_list_ptr syms) {
   int n = 0;
   while (arg) {
     if (n >= fun->lambda->argn) return node_err("too many lambda args");
-    CHECK(arg->type == T_CONS);
+    if (arg->type != T_CONS) return node_err("bug! bad arg list");
     blt_put(lsym->sym, fun->lambda->arg[n], arg->car);
     arg = arg->cdr;
     n++;
   }
   if (n < fun->lambda->argn) return node_err("too few lambda args");
   syms = lsym;
-  node_t r = EVAL_CHECK(fun->lambda->body);
+  node_t r = EVAL(fun->lambda->body);
   syms = orig;
   return r;
 }
@@ -172,28 +163,28 @@ node_t eval(node_t node, sym_list_t syms) {
   if (!node) return 0;
   switch (node->type) {
   case T_CONS:
-    if (node->car == sym_quote) return CAR(CDR(node));
-    if (node->car == sym_if) {
+    if (node->car == node_sym("quote")) return CAR(CDR(node));
+    if (node->car == node_sym("if")) {
       node = CDR(node);
       node_t cond = CAR(node);
       node = CDR(node);
       node_t ontrue = CAR(node);
       node = CDR(node);
       node_t onfalse = CAR(node);
-      return EVAL_CHECK(cond) ? EVAL_CHECK(ontrue) : EVAL_CHECK(onfalse);
+      return EVAL(cond) ? EVAL(ontrue) : EVAL(onfalse);
     }
-    if (node->car == sym_cond) {
+    if (node->car == node_sym("cond")) {
       while ((node = node->cdr)) {
         node_t x = CAR(node);
-        node_t r = EVAL_CHECK(CAR(x));
+        node_t r = EVAL(CAR(x));
         if (r) {
-          while ((x = CDR(x))) r = EVAL_CHECK(x->car);
+          while ((x = CDR(x))) r = EVAL(x->car);
           return r;
         }
       }
       return 0;
     }
-    if (node->car == sym_lambda) {
+    if (node->car == node_sym("lambda")) {
       lambda_t lambda = lambda_new();
       node = CDR(node);
       node_t vars = CAR(node);
@@ -207,13 +198,11 @@ node_t eval(node_t node, sym_list_t syms) {
       lambda->syms = syms;
       lambda->body = node->car;
       if (node->cdr) return node_err("too many args");
-      node_t r = malloc(sizeof(*r));
-      r->type = T_FUN;
-      r->fun = 0;
+      node_t r = node_new_fun(0);
       r->lambda = lambda;
       return r;
     }
-    if (node->car == sym_defun) {
+    if (node->car == node_sym("defun")) {
       lambda_t lambda = lambda_new();
       node = CDR(node);
       node_t name = CAR(node);
@@ -230,19 +219,17 @@ node_t eval(node_t node, sym_list_t syms) {
       lambda->syms = syms;
       lambda->body = node->car;
       if (node->cdr) return node_err("too many args");
-      node_t r = malloc(sizeof(*r));
-      r->type = T_FUN;
-      r->fun = 0;
+      node_t r = node_new_fun(0);
       r->lambda = lambda;
       blt_put(special, name->s, r);
       return r;
     }
-    if (node->car == sym_progn) {
+    if (node->car == node_sym("progn")) {
       node_t r = 0;
-      while ((node = CDR(node))) r = EVAL_CHECK(node->car);
+      while ((node = CDR(node))) r = EVAL(node->car);
       return r;
     }
-    if (node->car == sym_let) {
+    if (node->car == node_sym("let")) {
       sym_list_ptr lsym = malloc(sizeof(*lsym));
       lsym->next = syms;
       lsym->sym = blt_new();
@@ -253,40 +240,34 @@ node_t eval(node_t node, sym_list_t syms) {
         node_t var = CAR(varinit);
         if (var->type != T_SYM) return node_err("expected symbol");
         if (CDR(CDR(varinit))) return node_err("malformed let binding");
-        blt_put(lsym->sym, var->s, EVAL_CHECK(CAR(CDR(varinit))));
+        blt_put(lsym->sym, var->s, EVAL(CAR(CDR(varinit))));
         vars = CDR(vars);
       }
       syms = lsym;
       node_t r = 0;
-      while ((node = CDR(node))) r = EVAL_CHECK(CAR(node));
+      while ((node = CDR(node))) r = EVAL(CAR(node));
       syms = syms->next;
       return r;
     }
 
     {
-      node_t fun = EVAL_CHECK(node->car);
+      node_t fun = EVAL(node->car);
       if (fun->type != T_FUN) return node_err("expected function");
       node_t arg = 0, *p = &arg;
       for (;;) {
         node = node->cdr;
         if (!node) break;
         if (node->type != T_CONS) return node_err("expected list");
-        node_t c = malloc(sizeof(*c));
-        c->type = T_CONS;
-        c->car = EVAL_CHECK(node->car);
-        c->cdr = 0;
+        node_t c = node_new_cons(EVAL(node->car), 0);
         *p = c;
         p = &c->cdr;
       }
       return run(fun, arg, syms);
     }
-  case T_MPZ: {
-    node_t r = node_new_mpz();
-    mpz_set(r->z, node->z);
-    return r;
-  } break;
+  case T_MPZ:
+    return node_new_mpz(node->z);
   case T_SYM:
-    if (node == sym_nil) return 0;
+    if (node == node_sym("nil")) return 0;
     if (node == sym_t) return node;
     for (sym_list_ptr p = syms; p; p = p->next) {
       BLT_IT *it = blt_get(p->sym, node->s);
@@ -296,14 +277,7 @@ node_t eval(node_t node, sym_list_t syms) {
   case T_FUN:
     return node;
   }
-  die("TODO");
-}
-
-node_t node_new_fun(node_t (*fun)(node_t, sym_list_t)) {
-  node_t r = malloc(sizeof(*r));
-  r->type = T_FUN;
-  r->fun = fun;
-  return r;
+  return node_err("unhandled node type");
 }
 
 int main() {
@@ -321,7 +295,7 @@ int main() {
     }
   }_;})));
   blt_put(special, "+", node_new_fun(({node_t _(node_t arg, sym_list_ptr _) {
-    node_t r = node_new_mpz();
+    node_t r = node_new_mpz(0);
     while (arg) {
       if (arg->car->type != T_MPZ) return node_err("expected int");
       mpz_add(r->z, r->z, arg->car->z);
@@ -378,11 +352,7 @@ int main() {
     if (!arg || arg->type != T_CONS) return node_err("expected cons");
     if (arg->cdr == 0) return node_err("expected two arguments (got 1)");
     if (arg->cdr->cdr != 0) return node_err("expected only two arguments");
-    node_t r = malloc(sizeof(*r));
-    r->type = T_CONS;
-    r->car = arg->car;
-    r->cdr = arg->cdr->car;
-    return r;
+    return node_new_cons(arg->car, arg->cdr->car);
   }_;})));
   blt_put(special, "set", node_new_fun(({node_t _(node_t arg, sym_list_ptr syms) {
     if (!arg || arg->type != T_CONS) return node_err("expected cons");
@@ -430,15 +400,7 @@ int main() {
   }_;});
 
   allsyms = blt_new();
-  sym_quote  = node_new_sym("quote");
-  sym_if     = node_new_sym("if");
-  sym_cond   = node_new_sym("cond");
-  sym_nil    = node_new_sym("nil");
-  sym_t      = node_new_sym("t");
-  sym_lambda = node_new_sym("lambda");
-  sym_let    = node_new_sym("let");
-  sym_defun  = node_new_sym("defun");
-  sym_progn  = node_new_sym("progn");
+  sym_t = node_sym("t");
   node_t parse() {
     for (;;) {
       for(;;) {
@@ -457,39 +419,18 @@ int main() {
 
       char *word = strndup(start, cursor - start);
       if (*word == '(') {
-        node_t r = 0;
-        node_t *p = &r;
+        node_t r = 0, *p = &r;
         for(;;) {
           node_t item = parse();
           if (rparen == item) return r;
-          node_t c = malloc(sizeof(*c));
-          c->type = T_CONS;
-          c->car = item;
-          c->cdr = 0;
-          *p = c;
-          p = &c->cdr;
-        }
-      } else if (*word == ')') {
-        return rparen;
-      } else {
-        if (*word == '\'') {
-          node_t r = malloc(sizeof(*r));
-          r->type = T_CONS;
-          r->car = sym_quote;
-          r->cdr = malloc(sizeof(*r));
-          r->cdr->type = T_CONS;
-          r->cdr->car = parse();
-          r->cdr->cdr = 0;
-          return r;
-        } else if (!mpz_set_str(ztmp, word, 0)) {
-          node_t r = malloc(sizeof(*r));
-          r->type = T_MPZ;
-          mpz_init_set(r->z, ztmp);
-          return r;
-        } else {
-          return node_new_sym(word);
+          p = &(*p = node_new_cons(item, 0))->cdr;
         }
       }
+      if (*word == ')') return rparen;
+      if (*word == '\'') return node_new_cons(
+          node_sym("quote"), node_new_cons(parse(), 0));
+      if (!mpz_set_str(ztmp, word, 0)) return node_new_mpz(ztmp);
+      return node_sym(word);
       free(word);
     }
   }
