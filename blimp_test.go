@@ -24,7 +24,7 @@ func TestBasic(t *testing.T) {
   oneliner(t, "(+ 1 2 3)", "6")
   oneliner(t, "(+ 1 (+ 2 (+ 3) (+)))", "6")
   oneliner(t, "(car '(1 2 3))", "1")
-  oneliner(t, "(cdr '(1 2 3))", "(2 . (3 . nil))")
+  oneliner(t, "(cdr '(1 2 3))", "(2 3)")
   oneliner(t, "(set 'third (lambda (x) (car (cdr (cdr x))))) (third '(1 2 3 4))", "[function]\n3")
   oneliner(t, "(let ((x 5)) (set 'add5 (lambda (y) (+ x y)))) (add5 123)", "[function]\n128")
   oneliner(t, "(defun f (x) (if (< x 1) 0 (+ x (f (+ x -1))))) (f 100)", "[function]\n5050")
@@ -53,8 +53,8 @@ func TestFP(t *testing.T) {
 (append '(1 2 3) '(4 5 6))
 (map (lambda (x) (+ (+ x x) -1)) '(1 2 3 4 5))`,
 `600
-(1 . (2 . (3 . (4 . (5 . (6 . nil))))))
-(1 . (3 . (5 . (7 . (9 . nil)))))`)
+(1 2 3 4 5 6)
+(1 3 5 7 9)`)
 }
 
 // http://www.paulgraham.com/rootsoflisp.html
@@ -146,9 +146,9 @@ t)
 (eval. '((lambda (x y) (cons x (cdr y))) 'a '(b c d)) '())`, `t
 a
 t
-(a . (b . (c . nil)))
+(a b c)
 list
-(a . (b . (c . nil)))
+(a b c)
 a
-(a . (c . (d . nil)))`)
+(a c d)`)
 }

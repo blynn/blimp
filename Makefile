@@ -1,6 +1,5 @@
 CC:=gcc
-#CFLAGS:=-std=gnu99 -Wall -O2
-CFLAGS:=-std=gnu99 -Wall -g
+CFLAGS:=-std=gnu99 -Wall -O2
 
 blimp : blimp.c ; $(CC) $(CFLAGS) -o $@ $^ blt.c -lreadline -lgmp
 

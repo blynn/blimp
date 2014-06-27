@@ -54,8 +54,17 @@ void show(node_t node) {
   case T_CONS:
     putchar('(');
     show(node->car);
-    printf(" . ");
-    show(node->cdr);
+    while(node->cdr) {
+      if (node->cdr->type != T_CONS) {
+        printf(" . ");
+        show(node->cdr);
+        putchar(')');
+        return;
+      }
+      node = node->cdr;
+      putchar(' ');
+      show(node->car);
+    }
     putchar(')');
     return;
   case T_MPZ:
